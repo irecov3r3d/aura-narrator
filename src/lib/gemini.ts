@@ -27,16 +27,14 @@ export async function extractStoryText(pdfBytes: Uint8Array, mimeType: string, p
 
 export async function generateNarration(storyText: string, voiceName: string = 'Zephyr'): Promise<Float32Array[]> {
   // TTS limits text, so we might need to chunk if the story is long. 
-  // Let's chunk by paragraphs and sequentially generate.
+  // Let's chunk by paragraphs and generate them concurrently.
   const chunks = storyText.split(/\n\s*\n/).filter(c => c.trim().length > 0);
-  const audioChunks: Float32Array[] = [];
 
-  // To prevent timeouts, we can process them sequentially or batch them. 
   // For safety, let's limit chunks for this demo if there are too many.
   const maxChunks = Math.min(chunks.length, 10); // Safeguard
-  
-  for (let i = 0; i < maxChunks; i++) {
-    const chunk = chunks[i];
+  const chunksToProcess = chunks.slice(0, maxChunks);
+
+  const fetchChunk = async (chunk: string): Promise<Float32Array | null> => {
     try {
       const resp = await defaultAi.models.generateContent({
         model: 'gemini-3.1-flash-tts-preview',
@@ -65,12 +63,18 @@ export async function generateNarration(storyText: string, voiceName: string = '
          for (let j = 0; j < floats.length; j++) {
             floats[j] = dataView.getInt16(j * 2, true) / 32768.0;
          }
-         audioChunks.push(floats);
+         return floats;
       }
     } catch(err) {
       console.warn("Failed to generate audio for a chunk", err);
     }
-  }
+    return null;
+  };
+
+  const results = await Promise.all(chunksToProcess.map(fetchChunk));
+
+  // Filter out any chunks that failed to generate (nulls)
+  const audioChunks = results.filter((result): result is Float32Array => result !== null);
 
   return audioChunks;
 }
